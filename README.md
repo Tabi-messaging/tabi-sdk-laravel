@@ -1,14 +1,55 @@
 # tabi/laravel-sdk
 
-Laravel integration for the [**Tabi**](https://tabi.africa) WhatsApp Business Messaging API. This package registers [`tabi/sdk`](https://packagist.org/packages/tabi/sdk) (`Tabi\SDK\TabiClient`) in the service container with config from your environment.
+> Official **Laravel** integration for the **Tabi** WhatsApp Business Messaging API. Registers [`tabi/sdk`](https://packagist.org/packages/tabi/sdk) (`Tabi\SDK\TabiClient`) from environment configuration.
 
+[![Latest Stable Version](https://img.shields.io/packagist/v/tabi/laravel-sdk.svg)](https://packagist.org/packages/tabi/laravel-sdk)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+This package does not duplicate the HTTP client: it wires **`TabiClient`** into Laravel’s service container and provides a **facade**. All request/response behaviour, PHPDoc `array{…}` shapes, and endpoint coverage come from **`tabi/sdk`** (see `vendor/tabi/sdk/README.md` after install).
+
+---
+
+## Table of Contents
+
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Resolving the client](#resolving-the-client)
+- [Getting started](#getting-started)
+- [OTP over WhatsApp](#otp-over-whatsapp)
+- [Resource groups](#resource-groups-feature-areas)
+- [Resources](#resources)
+  - [Auth](#auth)
+  - [Channels](#channels)
+  - [Messages](#messages)
+  - [Contacts](#contacts)
+  - [Conversations](#conversations)
+  - [Webhooks](#webhooks)
+  - [API Keys](#api-keys)
+  - [Files](#files)
+  - [Campaigns](#campaigns)
+  - [Automation Templates](#automation-templates)
+  - [Automation Installs](#automation-installs)
+  - [Quick Replies](#quick-replies)
+  - [Analytics](#analytics)
+  - [Notifications](#notifications)
+  - [Integrations](#integrations)
+  - [Workspaces](#workspaces)
+- [Error handling](#error-handling)
+- [Return values](#return-values)
+- [Related](#related)
+- [Support](#support)
+- [License](#license)
+
+---
 
 ## Requirements
 
-- PHP >= 8.1
-- Laravel 10, 11, or 12
-- A Tabi API key (or JWT for endpoints that require it)
+- **PHP** >= 8.1  
+- **Laravel** 10, 11, or 12  
+- Extensions (pulled in via **`tabi/sdk`**): **curl**, **json**
+
+---
 
 ## Installation
 
@@ -16,7 +57,9 @@ Laravel integration for the [**Tabi**](https://tabi.africa) WhatsApp Business Me
 composer require tabi/laravel-sdk
 ```
 
-The service provider and `Tabi` facade are **auto-discovered** (no need to add them to `config/app.php`).
+The service provider and `Tabi` facade are **auto-discovered** (no manual `config/app.php` registration).
+
+---
 
 ## Configuration
 
@@ -26,52 +69,591 @@ Publish the config file (optional):
 php artisan vendor:publish --tag=tabi-config
 ```
 
-Set in `.env`:
-
-| Variable | Description |
-|----------|-------------|
-| `TABI_API_KEY` | Workspace or channel API key (`tk_...`) or JWT when required |
+| Env variable | Description |
+|--------------|-------------|
+| `TABI_API_KEY` | Workspace or channel API key (`tk_…`) or JWT when an endpoint requires dashboard auth |
 | `TABI_BASE_URL` | Optional. Default: `https://api.tabi.africa/api/v1` |
 
-## Usage
+**Credential sources**
 
-### Dependency injection
+| Value | Location |
+|-------|----------|
+| API key / JWT | Dashboard → Developer → API Keys (or login flow for JWT) |
+| Base URL | `TABI_BASE_URL` or default above |
+| Channel ID | Dashboard → Channels → open a channel → copy the ID from the URL |
+
+---
+
+## Resolving the client
+
+Use any of the following; they resolve the **same** singleton `TabiClient`:
+
+**Constructor injection**
 
 ```php
 use Tabi\SDK\TabiClient;
 
 public function __construct(private TabiClient $tabi) {}
+```
 
-$this->tabi->channels()->send('channel-uuid', [
+**Facade**
+
+```php
+use Tabi\Laravel\Facades\Tabi;
+
+Tabi::messages()->send('channel-id', [ /* ... */ ]);
+```
+
+**Container**
+
+```php
+$tabi = app(TabiClient::class);
+// or
+$tabi = app('tabi.client');
+```
+
+In the **Resources** section below, `$tabi` always means an instance of `TabiClient` obtained in one of these ways.
+
+---
+
+## Getting started
+
+```php
+<?php
+
+use Tabi\SDK\TabiClient;
+
+// In a controller or job — inject TabiClient, or use app(TabiClient::class)
+
+$result = $tabi->messages()->send('your-channel-id', [
     'to' => '2348012345678',
     'content' => 'Hello from Laravel!',
 ]);
 ```
 
-### Facade
+---
+
+## OTP over WhatsApp
+
+Hosted OTP uses `channels()->sendOtp` and `verifyOtp`, mapped to `POST /channels/{channelId}/otp/send` and `POST /channels/{channelId}/otp/verify` on the Tabi API.
+
+### Hosted OTP (recommended)
+
+1. Create or reuse a workspace API key (or JWT) with the same scopes as `messages()->send()` (for example `messages:send`).
+2. Call `sendOtp` with the channel UUID and an E.164 `phone` value.
+3. Call `verifyOtp` with the same channel, `phone`, and the code the user submitted.
 
 ```php
-use Tabi\Laravel\Facades\Tabi;
+<?php
 
-Tabi::channels()->sendOtp('channel-uuid', ['phone' => '+2348012345678']);
-Tabi::channels()->verifyOtp('channel-uuid', [
-    'phone' => '+2348012345678',
+$tabi->channels()->sendOtp('channel-uuid', ['phone' => '+2347000000000']);
+$tabi->channels()->verifyOtp('channel-uuid', [
+    'phone' => '+2347000000000',
     'code' => '123456',
 ]);
 ```
 
-### Container
+**REST:** `POST /api/v1/channels/{channelId}/otp/send` and `POST /api/v1/channels/{channelId}/otp/verify`.
+
+**Security:** Call these endpoints only from server-side Laravel code (controllers, jobs, commands). Do not expose the Tabi API key to the browser or mobile clients.
+
+### Compliance and rate limits
+
+- OTP traffic shares the same WhatsApp Business channel and rate limits as other sends.
+- Follow Meta / WhatsApp Business policies for templates, opt-in, and WABA configuration (Meta Business Manager).
+- Use OTP only for legitimate verification flows (for example sign-in), not for cold outreach or bulk marketing.
+
+### Custom OTP (without hosted routes)
+
+1. Generate codes and store hashes in application-controlled storage (for example Redis).
+2. Deliver the code with `messages()->send()`, using `messageClass` and other fields per the [HTTP API reference](https://tabi.africa/api-docs).
+
+---
+
+## Resource groups (feature areas)
+
+The client mirrors the **Tabi API**. Each method on `TabiClient` maps to one REST area.
+
+| Group | Client methods | What it covers |
+|-------|----------------|----------------|
+| Getting started | `auth()`, `workspaces()` | Login/register/tokens; workspaces, members, invites |
+| Messaging & inbox | `channels()`, `messages()`, `conversations()`, `contacts()`, `quickReplies()`, `notifications()` | WhatsApp lines, sends, threads, people, shortcuts |
+| Automations & campaigns | `automationTemplates()`, `automationInstalls()`, `campaigns()` | Template catalog, installed flows, broadcasts |
+| Integrations | `apiKeys()`, `webhooks()`, `integrations()` | Keys (create with JWT), outbound webhooks, third-party links |
+| Media & insights | `files()`, `analytics()` | Uploads, KPIs |
+
+**Parameters:** Request bodies and query maps are documented in PHPDoc on **`tabi/sdk`** resource classes (`array{ key: type, … }`). See the [HTTP API reference](https://tabi.africa/api-docs) (OpenAPI).
+
+---
+
+## Resources
+
+### Auth
+
+Login, register, refresh tokens, session helpers, and invite preview.
 
 ```php
-$tabi = app(\Tabi\SDK\TabiClient::class);
-// or
-$tabi = app('tabi.client');
+$session = $tabi->auth()->login('user@example.com', 'password');
+
+$tabi->auth()->register([
+    'email' => 'user@example.com',
+    'password' => 'securePassword',
+    'firstName' => 'John',
+    'lastName' => 'Doe',
+    'workspaceName' => 'My Company',
+]);
+
+$tabi->auth()->refresh('your-refresh-token');
+
+$me = $tabi->auth()->me();
+
+$tabi->auth()->logout();
+
+$tabi->auth()->invitePreview('invite-token-from-link');
 ```
 
-## API reference
+---
 
-All methods and request-body shapes are documented on **`Tabi\SDK\TabiClient`** and resource classes in **`tabi/sdk`**. See the [product SDK page](https://tabi.africa/sdks) and [HTTP API docs](https://tabi.africa/api-docs).
+### Channels
+
+Create, list, connect, and manage WhatsApp channels.
+
+```php
+$tabi->channels()->list();
+
+$tabi->channels()->get('channel-id');
+
+$tabi->channels()->create([
+    'name' => 'Support Line',
+    'provider' => 'messaging',
+]);
+
+$tabi->channels()->connect('channel-id');
+$tabi->channels()->connect('channel-id', ['some' => 'payload']);
+
+$tabi->channels()->status('channel-id');
+
+$tabi->channels()->disconnect('channel-id');
+
+$tabi->channels()->delete('channel-id');
+
+$tabi->channels()->update('channel-id', ['riskEngineEnabled' => false]);
+
+$tabi->channels()->reconnect('channel-id');
+
+$tabi->channels()->sendOtp('channel-id', ['phone' => '+2347000000000']);
+$tabi->channels()->verifyOtp('channel-id', ['phone' => '+2347000000000', 'code' => '123456']);
+```
+
+---
+
+### Messages
+
+Send text and rich messages, list timeline, reply, reactions, and media.
+
+```php
+$tabi->messages()->send('channel-id', [
+    'to' => '2348012345678',
+    'content' => 'Hello! How can we help you today?',
+]);
+
+$tabi->messages()->send('channel-id', [
+    'to' => '2348012345678',
+    'content' => 'Check this out!',
+    'messageType' => 'image',
+    'mediaUrl' => 'https://example.com/image.png',
+]);
+
+$tabi->messages()->send('channel-id', [
+    'to' => '2348012345678',
+    'content' => 'Here is your invoice',
+    'messageType' => 'document',
+    'mediaUrl' => 'https://example.com/invoice.pdf',
+]);
+
+$tabi->messages()->get('message-id');
+
+$tabi->messages()->listByConversation('conversation-id', [
+    'page' => 1,
+    'limit' => 50,
+]);
+
+$tabi->messages()->reply('conversation-id', [
+    'content' => 'Thanks for reaching out!',
+]);
+
+$tabi->messages()->sendPoll('channel-id', [
+    'to' => '2348012345678',
+    'question' => 'What do you prefer?',
+    'options' => ['Option A', 'Option B', 'Option C'],
+    'maxAnswer' => 1,
+]);
+
+$tabi->messages()->sendLocation('channel-id', [
+    'to' => '2348012345678',
+    'latitude' => '6.5244',
+    'longitude' => '3.3792',
+]);
+
+$tabi->messages()->sendContact('channel-id', [
+    'to' => '2348012345678',
+    'contactName' => 'Jane Doe',
+    'contactPhone' => '2348099999999',
+]);
+
+$tabi->messages()->sendSticker('channel-id', [
+    'to' => '2348012345678',
+    'stickerUrl' => 'https://example.com/sticker.webp',
+]);
+
+$tabi->messages()->react('channel-id', 'provider-msg-id', [
+    'emoji' => '👍',
+]);
+
+$tabi->messages()->markRead('channel-id', 'provider-msg-id');
+
+$tabi->messages()->edit('channel-id', 'provider-msg-id', [
+    'text' => 'Updated message text',
+]);
+
+$tabi->messages()->revoke('channel-id', 'provider-msg-id');
+
+$tabi->messages()->downloadMedia('channel-id', 'provider-msg-id');
+```
+
+---
+
+### Contacts
+
+Create, update, import, tags, and consent.
+
+```php
+$tabi->contacts()->list(['page' => 1, 'limit' => 20, 'search' => 'John']);
+
+$tabi->contacts()->get('contact-id');
+
+$tabi->contacts()->create([
+    'phone' => '2348012345678',
+    'name' => 'John Doe',
+    'email' => 'john@example.com',
+]);
+
+$tabi->contacts()->update('contact-id', ['name' => 'Johnathan Doe']);
+
+$tabi->contacts()->delete('contact-id');
+
+$tabi->contacts()->import([
+    'contacts' => [
+        ['phone' => '2348012345678', 'name' => 'Alice'],
+        ['phone' => '2348087654321', 'name' => 'Bob'],
+    ],
+]);
+
+$tabi->contacts()->getTags('contact-id');
+$tabi->contacts()->addTag('contact-id', 'vip');
+$tabi->contacts()->removeTag('contact-id', 'vip');
+
+$tabi->contacts()->optIn('contact-id');
+$tabi->contacts()->optOut('contact-id');
+```
+
+---
+
+### Conversations
+
+List, update, resolve, reopen, and read state.
+
+```php
+$tabi->conversations()->list(['page' => 1, 'limit' => 25, 'status' => 'open']);
+
+$tabi->conversations()->get('conversation-id');
+
+$tabi->conversations()->update('conversation-id', [
+    'assignedTo' => 'member-id',
+]);
+
+$tabi->conversations()->resolve('conversation-id');
+$tabi->conversations()->reopen('conversation-id');
+$tabi->conversations()->markRead('conversation-id');
+```
+
+---
+
+### Webhooks
+
+Subscriptions, delivery logs, secrets, and test capture.
+
+```php
+$tabi->webhooks()->create([
+    'url' => 'https://example.com/webhook',
+    'events' => ['message.received', 'message.sent', 'conversation.created'],
+]);
+
+$tabi->webhooks()->list();
+$tabi->webhooks()->get('webhook-id');
+
+$tabi->webhooks()->update('webhook-id', [
+    'url' => 'https://example.com/new-webhook',
+    'events' => ['message.received'],
+]);
+
+$tabi->webhooks()->ping('webhook-id');
+$tabi->webhooks()->rotateSecret('webhook-id');
+
+$tabi->webhooks()->deliveryLogs(['channelId' => 'channel-uuid', 'limit' => 50]);
+
+$tabi->webhooks()->startTestCapture(['channelId' => 'channel-uuid']);
+$tabi->webhooks()->testCaptureStatus(['channelId' => 'channel-uuid']);
+$tabi->webhooks()->stopTestCapture(['channelId' => 'channel-uuid']);
+
+$tabi->webhooks()->delete('webhook-id');
+```
+
+---
+
+### API Keys
+
+Create and manage API keys. **Creating keys requires a user JWT** from the dashboard (not an integrator API key alone).
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Label in the dashboard |
+| `channelId` | string (UUID) | no | Restrict key to one channel |
+| `scopes` | string[] | no | e.g. `['channels:read', 'messages:send']` |
+| `expiresAt` | ISO 8601 string | no | Key stops working after this time |
+
+```php
+$key = $tabi->apiKeys()->create([
+    'name' => 'Production Key',
+    'scopes' => ['messages:send', 'channels:read'],
+]);
+
+$tabi->apiKeys()->list();
+$tabi->apiKeys()->list(['channelId' => 'uuid-of-channel']);
+
+$tabi->apiKeys()->revoke('key-id');
+$tabi->apiKeys()->delete('key-id');
+```
+
+---
+
+### Files
+
+List files, metadata, signed URLs, delete.
+
+```php
+$tabi->files()->list();
+$tabi->files()->get('file-id');
+$tabi->files()->getUrl('file-id');
+$tabi->files()->delete('file-id');
+```
+
+---
+
+### Campaigns
+
+Draft, schedule, and control broadcast campaigns.
+
+```php
+$tabi->campaigns()->create([
+    'name' => 'Promo Blast',
+    'channelId' => 'channel-id',
+    'content' => 'Flash sale — 50% off today!',
+    'audienceFilter' => ['tags' => ['subscribers']],
+]);
+
+$tabi->campaigns()->list(['page' => 1, 'limit' => 10]);
+$tabi->campaigns()->get('campaign-id');
+
+$tabi->campaigns()->update('campaign-id', ['name' => 'Updated Promo']);
+
+$tabi->campaigns()->schedule('campaign-id');
+$tabi->campaigns()->pause('campaign-id');
+$tabi->campaigns()->resume('campaign-id');
+$tabi->campaigns()->cancel('campaign-id');
+
+$tabi->campaigns()->delete('campaign-id');
+```
+
+---
+
+### Automation Templates
+
+Browse the template catalog.
+
+```php
+$tabi->automationTemplates()->list();
+$tabi->automationTemplates()->get('template-id');
+```
+
+---
+
+### Automation Installs
+
+Install, configure, enable/disable, uninstall.
+
+```php
+$tabi->automationInstalls()->install([
+    'templateId' => 'template-uuid',
+    'config' => ['greeting' => 'Welcome!'],
+]);
+
+$tabi->automationInstalls()->list();
+$tabi->automationInstalls()->get('install-id');
+
+$tabi->automationInstalls()->update('install-id', [
+    'config' => ['greeting' => 'Hi there!'],
+]);
+
+$tabi->automationInstalls()->enable('install-id');
+$tabi->automationInstalls()->disable('install-id');
+$tabi->automationInstalls()->uninstall('install-id');
+```
+
+---
+
+### Quick Replies
+
+Canned responses for agents.
+
+```php
+$tabi->quickReplies()->list();
+
+$tabi->quickReplies()->create([
+    'title' => 'Greeting',
+    'shortcut' => '/hello',
+    'content' => 'Hello! How can I help you today?',
+]);
+
+$tabi->quickReplies()->update('reply-id', ['content' => 'Updated greeting']);
+$tabi->quickReplies()->delete('reply-id');
+```
+
+---
+
+### Analytics
+
+Dashboard and reporting (query parameters are reserved for future API filters where documented).
+
+```php
+$tabi->analytics()->dashboard();
+$tabi->analytics()->channels();
+$tabi->analytics()->conversations();
+```
+
+---
+
+### Notifications
+
+In-app notification inbox.
+
+```php
+$tabi->notifications()->list(['page' => 1, 'limit' => 20]);
+$tabi->notifications()->markRead('notification-id');
+$tabi->notifications()->markAllRead();
+$tabi->notifications()->unreadCount();
+```
+
+---
+
+### Integrations
+
+Third-party providers (CRM, helpdesk, etc.).
+
+```php
+$tabi->integrations()->listProviders();
+
+$tabi->integrations()->create([
+    'provider' => 'hubspot',
+    'credentials' => ['apiKey' => 'hs_...'],
+    'config' => [],
+]);
+
+$tabi->integrations()->list();
+$tabi->integrations()->get('integration-id');
+$tabi->integrations()->test('integration-id');
+$tabi->integrations()->update('integration-id', [
+    'config' => ['apiKey' => 'hs_new_key'],
+]);
+$tabi->integrations()->delete('integration-id');
+```
+
+---
+
+### Workspaces
+
+Workspaces and team members.
+
+```php
+$tabi->workspaces()->list();
+$tabi->workspaces()->get('workspace-id');
+$tabi->workspaces()->create(['name' => 'New Team']);
+$tabi->workspaces()->update('workspace-id', ['name' => 'Renamed Team']);
+
+$tabi->workspaces()->listMembers('workspace-id');
+
+$tabi->workspaces()->inviteMember('workspace-id', [
+    'email' => 'colleague@example.com',
+    'roleSlug' => 'admin',
+]);
+```
+
+---
+
+## Error handling
+
+Failed HTTP responses throw `Tabi\SDK\TabiException` with the status code and decoded body when available.
+
+```php
+use Tabi\SDK\TabiClient;
+use Tabi\SDK\TabiException;
+
+$tabi = app(TabiClient::class);
+
+try {
+    $tabi->messages()->send('channel-id', ['to' => '234...', 'content' => 'Hi']);
+} catch (TabiException $e) {
+    $e->getMessage();
+    $e->statusCode;
+    $e->body;
+}
+```
+
+### Common HTTP status codes
+
+| Status | Meaning |
+|--------|---------|
+| `400` | Bad request — check payload |
+| `401` | Unauthorized — invalid or expired token |
+| `403` | Forbidden — insufficient permissions |
+| `404` | Not found |
+| `409` | Conflict — duplicate or invalid state |
+| `429` | Rate limited — retry with backoff |
+| `500` | Server error — contact support |
+
+---
+
+## Return values
+
+Successful responses that use the API’s `{ "success": true, "data": ... }` envelope return the **`data`** value only (typically an array). See the [API docs](https://tabi.africa/api-docs) for each endpoint’s schema.
+
+---
+
+## Related
+
+- **Plain PHP (no Laravel):** [`tabi/sdk` on Packagist](https://packagist.org/packages/tabi/sdk)
+- **JavaScript / TypeScript:** [`tabi-sdk` on npm](https://www.npmjs.com/package/tabi-sdk)
+- **HTTP reference:** [tabi.africa/api-docs](https://tabi.africa/api-docs)
+
+---
+
+## Support
+
+- Product overview: [tabi.africa/sdks](https://tabi.africa/sdks)
+- HTTP API reference: [tabi.africa/api-docs](https://tabi.africa/api-docs)
+
+---
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE) for details.

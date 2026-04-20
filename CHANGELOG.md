@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.1 - 2026-04-20
+
+### Changed
+
+- **README:** Full documentation parity with `tabi/sdk` — table of contents, configuration, resolving the client (DI / facade / container), OTP section, resource groups, per-resource examples (Auth through Workspaces), error handling, return values, related links. Clarified `sendLocation` / `sendSticker` request shapes and analytics behaviour vs the HTTP API.
+
 ## 0.1.0 - 2026-04-20
 
 ### Added
